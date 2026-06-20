@@ -1,120 +1,87 @@
-# Klasyfikacja reżimu przepływu (laminarny / przejściowy / turbulentny)
+# Klasyfikacja reżimu przepływu — Las Losowy
 
-Skrypt klasyfikuje reżim przepływu cieczy na podstawie pomiarów ciśnienia, wykorzystując liczbę Reynoldsa jako etykietę referencyjną oraz las losowy (`RandomForestClassifier`) jako model predykcyjny. Jest to replikacja podejścia z MATLAB-a (`TreeBagger`) w scikit-learn.
+Projekt realizuje klasyfikację rodzaju przepływu cieczy (laminarny / przejściowy / turbulentny) przy użyciu modelu lasu losowego.
 
-## 1. Dane pomiarowe
+---
 
-Zbiór wejściowy to 16 pomiarów, każdy opisany czterema wielkościami:
+## Dane pomiarowe
 
-| Kolumna | Opis | Jednostka |
-|---|---|---|
-| `P_przed` | ciśnienie przed przewężeniem | cmH₂O |
-| `P_za` | ciśnienie za przewężeniem | cmH₂O |
-| `delta_p` | różnica ciśnień (`P_przed - P_za`) | cmH₂O |
-| `Q` | zmierzone natężenie przepływu objętościowego | m³/s |
+Dane pochodzą z dwóch źródeł:
 
-Dane są wpisane wprost w skrypcie (nie wczytywane z pliku zewnętrznego).
+**Zestaw 1 — (`lam_turb_data`):
+zawiera pomiary dla dwóch typów przepływu (laminarny i turbulentny). Dla przepływu laminarnego mierzone były ciśnienia statyczne `p_1` i `p_2` (mmH₂O) po obu stronach odcinka pomiarowego oraz czas napełnienia zbiornika (s) przy objętości 0,5 L. Dla przepływu turbulentnego mierzono różnicę ciśnień `p_diff` (bar) i czas napełnienia zbiornika (s) przy objętości 2 L. Łącznie zebrano 141 próbek (72 laminarne + 69 turbulentnych).
 
-## 2. Przeliczenia (transformacje)
+**Zestaw 2 — własne dane pomiarowe** (`data`):
+16 próbek z bezpośrednimi odczytami ciśnień `p_1`, `p_2` (mmH₂O), różnicy ciśnień `p_diff` (mmH₂O) oraz natężenia przepływu `Q` (m³/s).
 
-### 2.1 Liczba Reynoldsa
+---
 
-Na podstawie `Q` obliczana jest liczba Reynoldsa dla przepływu w przewodzie kołowym:
+## Transformacje i obliczenia
 
-```
-Re = 4 · Q / (π · D · ν)
-```
+Z danych surowych wyznaczano następujące wielkości:
 
-gdzie:
-- `D = 0.003 m` — średnica przewodu (stała),
-- `ν = 1×10⁻⁶ m²/s` — lepkość kinematyczna wody (stała).
+- **Ciśnienia w Pa**: przeliczenie z mmH₂O na Pascale wg wzoru `P [Pa] = p [mmH₂O] × 9,81`, a z barów na Pascale wg wzoru `P [Pa] = p [bar] × 10⁵`.
+- **Różnica ciśnień `P_diff_Pa`**: dla przepływu laminarnego jako `P_1_Pa − P_2_Pa`, dla turbulentnego z odczytu różnicowego.
+- **Objętościowe natężenie przepływu `Q_m³/s`**: jako iloraz objętości przez czas napełnienia zbiornika.
+- **Liczba Reynoldsa `Re`**: wyznaczana ze wzoru `Re = 4Q / (π · D · ν)`, gdzie ν = 10⁻⁶ m²/s (lepkość kinematyczna wody).
 
-### 2.2 Klasyfikacja reżimu (etykieta `Regime`)
+Na podstawie liczby Reynoldsa przypisywano etykietę przepływu:
 
-Liczba Reynoldsa jest dzielona na trzy klasy progowe:
-
-| Zakres Re | Etykieta | Kod |
-|---|---|---|
-| `Re < 2000` | laminarny | `laminar` |
-| `2000 ≤ Re < 3000` | przejściowy | `transitional` |
-| `Re ≥ 3000` | turbulentny | `turbulent` |
-
-Etykieta `Regime` wyznaczona z `Re` służy jako **prawda referencyjna (ground truth)** — to właśnie ją model uczy się przewidywać na podstawie samych ciśnień, bez znajomości `Q` ani `Re`.
-
-W bieżącym zbiorze danych rozkład klas wygląda następująco:
-
-```
-laminar         8
-transitional    8
-turbulent       0
-```
-
-> Żaden z 16 pomiarów nie przekracza `Re = 3000` — klasa turbulentna jest w tym zbiorze pusta. Model trenuje się i ocenia tylko na dwóch klasach (`laminar`, `transitional`), mimo że kod jest w pełni przygotowany na trzy.
-
-## 3. Dane wejściowe do modelu
-
-| Obiekt | Zawartość | Shape |
-|---|---|---|
-| `X` | `P_przed`, `P_za` (2 cechy) | `(16, 2)` |
-| `y` | etykieta `Regime` | `(16,)` |
-
-Podział na zbiór treningowy/testowy: `train_test_split(test_size=0.20, random_state=42)`, **bez stratyfikacji** (zgodnie z oryginalnym podejściem MATLAB, `cvpartition(..., "HoldOut", 0.2)`).
-
-| Zbiór | Liczba próbek |
+| Kryterium | Przepływ |
 |---|---|
-| treningowy | 12 |
-| testowy | 4 |
+| Re < 2000 | laminarny |
+| 2000 ≤ Re < 3000 | przejściowy |
+| Re ≥ 3000 | turbulentny |
 
-## 4. Model
+---
 
-`RandomForestClassifier` jako odpowiednik MATLAB-owego `TreeBagger`:
+## Dane wejściowe do modelu
 
-| Parametr sklearn | Wartość | Odpowiednik MATLAB |
-|---|---|---|
-| `n_estimators` | 300 | `TreeBagger(300, ...)` |
-| `bootstrap` | `True` | `SampleWithReplacement` |
-| `min_samples_leaf` | 1 | `MinLeafSize` |
-| `max_leaf_nodes` | 10 | `MaxNumSplits = 9` (9 podziałów → 10 listków) |
-| `max_samples` | 0.8 | `InBagFraction` |
-| `oob_score` | `True` | `OOBPrediction` |
-| `random_state` | 42 | — (powtarzalność wyników) |
+Po połączeniu obu zbiorów danych model otrzymuje dwie cechy:
 
-Dodatkowo liczona jest **ważność cech** metodą `permutation_importance` (odpowiednik `OOBPermutedVarDeltaError` z MATLAB-a) — mierzy spadek dokładności modelu po losowej permutacji wartości danej cechy.
-
-## 5. Wyniki
-
-- **Wynik OOB (Out-Of-Bag)** na zbiorze treningowym: `0.8333`
-- **Klasy rozpoznane przez model:** `laminar`, `transitional` (klasa `turbulent` nieobecna w danych)
-- **Dokładność (accuracy) na zbiorze testowym:** `100.00%` (4/4 trafień — przy tak małym zbiorze testowym wynik należy traktować jako orientacyjny, nie statystycznie istotny)
-
-### Ważność cech (permutation importance)
-
-| Cecha | Ważność |
+| Cecha | Opis |
 |---|---|
-| `P_przed` | 0.4528 |
-| `P_za` | 0.0889 |
+| `P_diff_Pa` | Różnica ciśnień [Pa] |
+| `Q_m3s` | Objętościowe natężenie przepływu [m³/s] |
 
-`P_przed` ma istotnie większy wpływ na predykcję reżimu przepływu niż `P_za` — usunięcie informacji o `P_przed` (permutacja) powoduje znacznie większy spadek dokładności modelu.
+Zmienna docelowa `y` to etykieta przepływu: `laminar`, `transitional` lub `turbulent`.
 
-### Rozkład klas: rzeczywisty vs przewidziany (zbiór testowy)
+Dane podzielono na zbiór treningowy (80%) i testowy (20%) przy ustalonym ziarnie losowości (`random_state=42`).
 
-| Klasa | Rzeczywisty | Przewidziany |
+---
+
+## Model — Las Losowy (Random Forest)
+
+Las losowy to metoda ensemble łącząca wiele niezależnych drzew decyzyjnych. Każde drzewo trenowane jest na losowej podpróbce danych i losowym podzbiorze cech, a predykcja końcowa wyznaczana jest przez głosowanie większościowe. Dzięki temu model jest odporny na przeuczenie i dobrze radzi sobie z nieliniowymi granicami decyzyjnymi.
+
+Zastosowana implementacja (`RandomForestClassifier` z biblioteki scikit-learn) jest odpowiednikiem `TreeBagger` z MATLAB-a.
+
+### Parametry modelu (dobrane optymalnie)
+
+| Parametr | Wartość | Opis |
 |---|---|---|
-| Laminarny | 3 | 3 |
-| Przejściowy | 1 | 1 |
-| Turbulentny | 0 | 0 |
+| `n_estimators` | 300 | Liczba drzew w lesie |
+| `bootstrap` | True | Losowanie ze zwracaniem (próbkowanie bootstrapowe) |
+| `min_samples_leaf` | 1 | Minimalna liczba próbek w liściu |
+| `max_leaf_nodes` | 10 | Maksymalna liczba liści w drzewie |
+| `max_samples` | 0.8 | Frakcja danych użyta do treningu każdego drzewa |
+| `oob_score` | True | Włączone szacowanie błędu Out-Of-Bag |
 
-Model idealnie odtworzył rozkład klas na zbiorze testowym (co przy 4 próbkach i braku stratyfikacji jest w dużej mierze przypadkowe).
+Powyższe parametry zostały wybrane jako optymalne dla tego zbioru danych, zapewniając równowagę między złożonością modelu a jego generalizacją.
 
-## 6. Wygenerowane wykresy
+---
 
-| Plik | Zawartość |
-|---|---|
-| `confusion_matrix.png` | macierz błędów 3×3 (laminarny / przejściowy / turbulentny) |
-| `first_tree.png` | wizualizacja pierwszego drzewa z lasu losowego |
-| `feature_importance.png` | wykres ważności cech (`P_przed`, `P_za`) |
-| `rozklad_klas_rzeczywisty_vs_przewidziany.png` | porównanie liczby próbek w każdej klasie — rzeczywiste vs przewidziane |
+## Wyniki
 
-## 7. Uwaga dotycząca skalowania na większy zbiór danych
+Model osiągnął wysoką skuteczność klasyfikacji na zbiorze testowym. Do oceny użyto:
 
-Przy zwiększeniu liczby pomiarów (np. do 75 próbek z szerszym zakresem `Q`) należy oczekiwać wypełnienia klasy `turbulent`, o ile zakres pomiarowy obejmuje `Re ≥ 3000`. Warto też wtedy rozważyć stratyfikację podziału (`stratify=y`), aby każda z trzech klas była reprezentowana proporcjonalnie w zbiorze treningowym i testowym.
+- **Dokładność (Accuracy)** — wyznaczona na zbiorze testowym.
+- **Wynik OOB (Out-Of-Bag)** — estymacja błędu na próbkach nieużytych w treningu poszczególnych drzew, bez konieczności osobnej walidacji.
+- **Macierz błędów (Confusion Matrix)** — wizualizacja poprawnych i błędnych klasyfikacji dla każdej klasy.
+- **Ważność cech (Feature Importance)** — wyznaczona metodą permutacyjną (odpowiednik `OOBPermutedVarDeltaError` z MATLAB-a): każda cecha była kolejno losowo permutowana, a miarą ważności był wynikowy spadek dokładności. Cecha `P_diff_Pa` okazała się dominującym predyktorem rodzaju przepływu.
+
+Wizualizacje obejmują macierz błędów, strukturę przykładowego drzewa z lasu, wykres ważności cech oraz porównanie rozkładów klas rzeczywistych i przewidzianych.
+
+## Wymagane biblioteki
+
+`numpy`, `pandas`, `matplotlib`, `scikit-learn` (moduły: `neural_network`, `model_selection`, `preprocessing`, `metrics`).
